@@ -11,9 +11,6 @@ for AMD Instinct GPUs. The demo is modular and easily extensible.
 
 ### hipCIM
 
-**Note**
-_hipCIM is in an early access state. Running production workloads is not recommended._
-
 hipCIM (HIP Computational Imaging and Microscopy) is an advanced GPU-accelerated 
 library designed to unleash the full power of AMD Instinct GPUs for large-scale 
 biomedical image analysis. As part of the ROCm-LS Life Sciences software suite, 
@@ -34,9 +31,6 @@ accessibility to life sciences innovators, but also a collaborative foundation
 for reproducible, next-generation biomedical imaging solutions.
 
 ### MONAI
-
-**Note**
-_MONAI is in an early access state. Running production workloads is not recommended._
 
 MONAI (Medical Open Network for AI) is the leading open-source, PyTorch-based 
 framework purpose-built for accelerating deep learning innovation in healthcare 
@@ -117,7 +111,7 @@ Both hipCIM and MONAI are early access releases. The demo and supported features
 
 ### Prerequisites
 - AMD Instinct GPUs (MI300 and above)
-- ROCm 6.4+ (see ROCm-LS GitHub for installation guides)
+- ROCm 7.0+ (see ROCm-LS GitHub for installation guides)
 - Docker (recommended) with CLI access to ROCm
 - Python 3.10+
 
@@ -156,26 +150,85 @@ cd examples
 
 #### Bare metal
 
-```
+```bash
+# Set ROCm environment variables
 export HIP_PATH=/opt/rocm
 export PATH=$HIP_PATH/bin:$PATH
 export ROCM_PATH=/opt/rocm
 export LD_LIBRARY_PATH=$HIP_PATH/lib:$LD_LIBRARY_PATH
 export ROCM_HOME=/opt/rocm
 
-apt update && \
-    apt install -y software-properties-common lsb-release gnupg && \
+# Install system dependencies
+apt-get update && \
+    apt-get install -y software-properties-common lsb-release gnupg && \
     apt-key adv --fetch-keys https://apt.kitware.com/keys/kitware-archive-latest.asc && \
     add-apt-repository -y "deb https://apt.kitware.com/ubuntu/ $(lsb_release -cs) main" && \
-    apt update && \
-    apt install -y git wget gcc g++ ninja-build git-lfs       \
-                    yasm libopenslide-dev python3.10-venv        \
-                    cmake rocjpeg rocjpeg-dev rocthrust-dev      \
-                    hipcub hipblas hipblas-dev hipfft hipsparse  \
-                    hiprand rocsolver rocrand-dev rocm-hip-sdk libvips supervisor
+    apt-get update && \
+    apt-get install -y git wget gcc g++ ninja-build git-lfs \
+                       yasm libopenslide-dev python3 python3-venv \
+                       python3-dev libpython3-dev \
+                       cmake libvips supervisor
 
+# Install amdgpu-install package if not already present
+if ! dpkg -s amdgpu-install >/dev/null 2>&1; then
+    rm -f /etc/apt/sources.list.d/amdgpu.list /etc/apt/sources.list.d/rocm.list
+    ROCM_VERSION=$(cat /opt/rocm/.info/version)
+    UBUNTU_CODENAME=$(lsb_release -cs)
+    echo "Detected ROCm version: ${ROCM_VERSION}, Ubuntu codename: ${UBUNTU_CODENAME}"
+    MAJOR=$(echo ${ROCM_VERSION} | cut -d. -f1)
+    MINOR=$(echo ${ROCM_VERSION} | cut -d. -f2)
+    PATCH=$(echo ${ROCM_VERSION} | cut -d. -f3)
+    PATCH=${PATCH:-0}
+    VERNUM=$((MAJOR * 10000 + MINOR * 100 + PATCH))
+    if [ "${PATCH}" = "0" ]; then SHORT_VERSION="${MAJOR}.${MINOR}"; else SHORT_VERSION="${MAJOR}.${MINOR}.${PATCH}"; fi
+    AMDGPU_URL="https://repo.radeon.com/amdgpu-install/${SHORT_VERSION}/ubuntu/${UBUNTU_CODENAME}/amdgpu-install_${SHORT_VERSION}.${VERNUM}-1_all.deb"
+    echo "Downloading: ${AMDGPU_URL}"
+    wget "${AMDGPU_URL}" -O amdgpu-install.deb
+    apt-get update
+    DEBIAN_FRONTEND=noninteractive apt-get install -y ./amdgpu-install.deb
+    rm -f amdgpu-install.deb
+else
+    echo "amdgpu-install already present, skipping install"
+fi
+
+# Install AMD GPU libraries and ROCm packages
+apt-get update && \
+    apt-get install -y --no-install-recommends amdgpu-lib && \
+    apt-get install -y --no-install-recommends rocjpeg rocjpeg-dev rocthrust-dev \
+                    hipcub hipblas hipblas-dev hipfft hipsparse \
+                    hiprand rocsolver rocrand-dev rocm-hip-sdk
+
+# Set up Python virtual environment
+python3 -m venv /venv
+source /venv/bin/activate
+
+# Upgrade pip, setuptools, and wheel
 python -m pip install --upgrade pip setuptools wheel
-pip install -r requirements.txt
+
+# Install PyTorch with ROCm support
+ROCM_FULL=$(cat /opt/rocm/.info/version | cut -d. -f1,2,3)
+ROCM_SHORT=$(echo ${ROCM_FULL} | cut -d. -f1,2)
+echo "Installing PyTorch for ROCm ${ROCM_SHORT}"
+pip install torch torchvision torchaudio \
+    --index-url https://download.pytorch.org/whl/rocm${ROCM_SHORT}
+
+# Install remaining requirements with AMD PyPI index
+echo "Installing remaining requirements for ROCm ${ROCM_FULL}"
+pip install \
+    --extra-index-url https://pypi.amd.com/rocm-${ROCM_FULL}/simple/ \
+    -r requirements.txt
+
+# Set CPATH for Clang headers (required for ROCm 7.2+)
+CLANG_VER=$(ls /opt/rocm/lib/llvm/lib/clang 2>/dev/null | sort -V | tail -1)
+if [ -n "$CLANG_VER" ]; then
+    export CPATH="/opt/rocm/lib/llvm/lib/clang/${CLANG_VER}/include"
+    echo "CPATH set to: ${CPATH}"
+else
+    echo "WARNING: Could not detect Clang version in /opt/rocm/lib/llvm/lib/clang"
+    echo "CPATH not set - hipCIM compilation may fail"
+fi
+
+# Run the Streamlit demo
 streamlit run rocm-ls_demo.py
 ```
 
